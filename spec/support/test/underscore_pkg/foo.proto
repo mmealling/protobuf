@@ -1,0 +1,25 @@
+package test.underscore_pkg;
+
+message Foo {
+  optional string bar = 1;
+  optional With_Underscore with_underscore = 2;
+}
+
+message With_Underscore {
+  optional string foo = 1;
+}
+message simple_mail {
+  optional simple_Mail foo = 1;
+  optional Simple_Mail bar = 2;
+  optional simpleMail baz = 3;
+  optional SimpleMail qux = 4;
+  optional SIMPLE_MAIL quux = 5;
+  optional SIMPLEMAIL corge = 6;
+}
+message simple_Mail { }
+message Simple_Mail { }
+message simpleMail { }
+message SimpleMail { }
+message SimpleMAIL { }
+message SIMPLE_MAIL { }
+message SIMPLEMAIL { }

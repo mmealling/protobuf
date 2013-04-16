@@ -26,6 +26,18 @@ class LIBPROTOC_EXPORT RubyGenerator : public CodeGenerator {
 		RubyGenerator();
 		~RubyGenerator();
 
+    typedef enum {
+      RUBY_CLASS,
+      RUBY_MODULE
+    } RubyBlockType;
+
+    typedef enum {
+      CLASS_TYPE_MESSAGE,
+      CLASS_TYPE_ENUM,
+      CLASS_TYPE_SERVICE,
+      CLASS_TYPE_NONE
+    } RubyClassType;
+
 		// implemented Generate method from parent
 		bool Generate(const FileDescriptor* file,
 			const string& parameter,
@@ -39,6 +51,8 @@ class LIBPROTOC_EXPORT RubyGenerator : public CodeGenerator {
 		mutable string filename;
 		mutable vector<string> ns_vector;
     mutable tr1::unordered_map<string, vector<const FieldDescriptor*> > extended_messages;
+    mutable int indent_level;
+    mutable string failed_message;
 
 		GOOGLE_DISALLOW_EVIL_CONSTRUCTORS(RubyGenerator);
 
@@ -71,9 +85,21 @@ class LIBPROTOC_EXPORT RubyGenerator : public CodeGenerator {
 		void PrintComment(string comment, bool as_header) const;
 		void PrintRequire(string lib_name) const;
 		void PrintNewLine() const;
+		void PrintNewLine(int num_newlines) const;
+		void Indent() const;
+		void Outdent() const;
+
+    void PrintClassDeclaration(string class_name, RubyClassType class_type) const;
+    void PrintClassDeclaration(string class_name, RubyClassType class_type, bool empty_body) const;
+    void PrintModuleDeclaration(string module_name) const;
+    void PrintModuleDeclaration(string module_name, bool empty_body) const;
+    void PrintBlockDeclaration(RubyBlockType block_type, RubyClassType class_type, string block_name, bool empty_body) const;
+    void PrintBlockEnd() const;
 
     void StoreExtensionFields(const FileDescriptor* descriptor) const;
     void StoreExtensionFields(const Descriptor* descriptor) const;
+
+    void ValidatePrinter(string fail_message) const;
 
 		// Take the proto file name, strip ".proto"
 		// from the end and add ".pb.rb"
@@ -127,34 +153,10 @@ class LIBPROTOC_EXPORT RubyGenerator : public CodeGenerator {
 				else if (c == 95) { // underscore char
 					segment_end = true;
 				}
-				else if (segment_end) {
-					if (c >= 97 && c <= 122) { // a-z chars
-						c -= 32;
-					}
-					segment_end = false;
-				}
 				constantized << c;
 			}
 
 			return constantized.str();
-		}
-
-		static string Underscore(string name) {
-			stringstream underscored;
-
-			string::iterator i;
-			for (i = name.begin(); i < name.end(); i++) {
-				char c = *i;
-				if (c >= 65 && c <= 90) { // a-z chars
-					if (i != name.begin()) {
-						underscored << '_';
-					}
-					c += 32;
-				}
-				underscored << c;
-			}
-
-			return underscored.str();
 		}
 
     static string FullEnumNamespace(const EnumValueDescriptor* descriptor) {
@@ -192,11 +194,13 @@ int _rprotoc_extern(int argc, char* argv[]) {
 /*
 
 Use for testing:
+*/
 
 int main(int argc, char* argv[]) {
   return _rprotoc_extern(argc, argv);
 }
 
+/*
 */
 
 #ifdef __cplusplus

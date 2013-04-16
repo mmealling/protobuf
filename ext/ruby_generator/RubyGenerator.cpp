@@ -30,33 +30,38 @@ bool RubyGenerator::Generate(const FileDescriptor* file,
   // Get a printer.
   io::Printer printer(output.get(), '$');
   printer_ = &printer;
+  indent_level = 0;
 
-  PrintGeneratedFileComment();
-  PrintGenericRequires();
-  PrintImportRequires();
+  try {
+    PrintGeneratedFileComment();
+    PrintGenericRequires();
+    PrintImportRequires();
 
-  PrintEnclosingNamespaceModules();
+    PrintEnclosingNamespaceModules();
 
-  PrintEnumsForFileDescriptor(file_, false);
-  PrintNewLine();
-  PrintMessagesForFileDescriptor(file_, false);
-  PrintNewLine();
+    PrintEnumsForFileDescriptor(file_, false);
+    PrintNewLine();
+    PrintMessagesForFileDescriptor(file_, false);
+    PrintNewLine();
 
-  PrintMessagesForFileDescriptor(file_, true);
+    PrintMessagesForFileDescriptor(file_, true);
 
-  PrintDanglingExtendedMessages();
+    PrintDanglingExtendedMessages();
 
-  PrintServices();
+    PrintServices();
 
-  PrintEnclosingNamespaceModuleEnds();
-
-  if (printer.failed()) {
-    *error = "An unknown error occured writing file " + filename;
+    PrintEnclosingNamespaceModuleEnds();
+  }
+  catch (int e) {
+    if (failed_message.empty()) {
+      *error = strings::Substitute("An unknown error occurred compiling $0", filename).c_str();
+    }
+    else {
+      *error = failed_message.c_str();
+    }
     return false;
   }
-  else {
-    return true;
-  }
+  return true;
 } // end Generate()
 
 //
@@ -68,20 +73,14 @@ void RubyGenerator::PrintEnclosingNamespaceModules() const {
   vector<string>::iterator iter;
   map<string,string> data;
   for (iter = ns_vector.begin(); iter < ns_vector.end(); iter++) {
-    data["ns"] = Constantize(*iter, false);
-
-    printer_->Print(data, "module $ns$");
-    PrintNewLine();
-    printer_->Indent();
+    PrintModuleDeclaration(Constantize(*iter, false));
   }
 }
 
 void RubyGenerator::PrintEnclosingNamespaceModuleEnds() const {
   vector<string>::iterator iter;
   for (iter = ns_vector.begin(); iter < ns_vector.end(); iter++) {
-    printer_->Outdent();
-    printer_->Print("end");
-    PrintNewLine();
+    PrintBlockEnd();
   }
 }
 
@@ -120,16 +119,11 @@ void RubyGenerator::PrintMessagesForDescriptor(const Descriptor* descriptor, boo
 // Print out the given descriptor message as a Ruby class.
 //
 void RubyGenerator::PrintMessage(const Descriptor* descriptor, bool print_fields) const {
-  map<string,string> data;
-  data["class_name"] = descriptor->name();
-
   switch (print_fields) {
     case false:
 
       if (DescriptorHasNestedTypes(descriptor)) {
-        printer_->Print(data, "class $class_name$ < ::Protobuf::Message");
-        PrintNewLine();
-        printer_->Indent();
+        PrintClassDeclaration(descriptor->name(), CLASS_TYPE_MESSAGE);
 
         if (descriptor->enum_type_count() > 0) {
           PrintEnumsForDescriptor(descriptor, true);
@@ -139,11 +133,10 @@ void RubyGenerator::PrintMessage(const Descriptor* descriptor, bool print_fields
           PrintMessagesForDescriptor(descriptor, false);
         }
 
-        printer_->Outdent();
-        printer_->Print(data, "end");
+        PrintBlockEnd();
       }
       else {
-        printer_->Print(data, "class $class_name$ < ::Protobuf::Message; end");
+        PrintClassDeclaration(descriptor->name(), CLASS_TYPE_MESSAGE, true);
       }
 
       PrintNewLine();
@@ -154,9 +147,7 @@ void RubyGenerator::PrintMessage(const Descriptor* descriptor, bool print_fields
     case true:
 
       if (descriptor->field_count() > 0 || DescriptorHasExtensions(descriptor)) {
-        printer_->Print(data, "class $class_name$");
-        PrintNewLine();
-        printer_->Indent();
+        PrintClassDeclaration(descriptor->name(), CLASS_TYPE_NONE);
 
         if (descriptor->nested_type_count() > 0) {
           PrintMessagesForDescriptor(descriptor, true);
@@ -176,23 +167,17 @@ void RubyGenerator::PrintMessage(const Descriptor* descriptor, bool print_fields
           PrintMessageExtensionFields(descriptor->full_name());
         }
 
-        printer_->Outdent();
-        printer_->Print(data, "end");
-        PrintNewLine();
+        PrintBlockEnd();
         PrintNewLine();
       }
       else if (descriptor->nested_type_count() > 0) {
-        printer_->Print(data, "class $class_name$");
-        PrintNewLine();
-        printer_->Indent();
+        PrintClassDeclaration(descriptor->name(), CLASS_TYPE_NONE);
 
         if (descriptor->nested_type_count() > 0) {
           PrintMessagesForDescriptor(descriptor, true);
         }
 
-        printer_->Outdent();
-        printer_->Print(data, "end");
-        PrintNewLine();
+        PrintBlockEnd();
         PrintNewLine();
       }
 
@@ -207,11 +192,8 @@ void RubyGenerator::PrintExtensionRangesForDescriptor(const Descriptor* descript
 
     for (int i = 0; i < descriptor->extension_range_count(); i++) {
       const Descriptor::ExtensionRange* range = descriptor->extension_range(i);
-      map<string,string> data;
-      data["message_class"] = Constantize(descriptor->full_name());
-      data["start"] = SimpleItoa(range->start);
-      data["end"] = SimpleItoa(range->end);
-      printer_->Print(data, "extensions $start$...$end$");
+      printer_->Print("extensions $start$...$end$", "start", SimpleItoa(range->start), "end", SimpleItoa(range->end));
+      ValidatePrinter("Failed printing extension ranges");
       PrintNewLine();
     }
   }
@@ -310,6 +292,7 @@ void RubyGenerator::PrintMessageField(const FieldDescriptor* descriptor) const {
     "$packed_opt$"
     "$deprecated_opt$"
     "$extension_opt$");
+  ValidatePrinter("Failed printing message field");
   PrintNewLine();
 }
 
@@ -322,7 +305,7 @@ void RubyGenerator::PrintMessageField(const FieldDescriptor* descriptor) const {
 void RubyGenerator::PrintMessageExtensionFields(const string full_name) const {
   vector<const FieldDescriptor*> message_extensions = extended_messages[full_name];
   vector<const FieldDescriptor*>::iterator it;
-  for (it = message_extensions.begin(); it != message_extensions.end(); ++it) {
+  for (it = message_extensions.begin(); it != message_extensions.end(); it++) {
     PrintMessageField(*it);
   }
   extended_messages.erase(full_name);
@@ -355,30 +338,21 @@ void RubyGenerator::PrintEnumsForFileDescriptor(const FileDescriptor* descriptor
 
 // Print the given enum descriptor as a Ruby class.
 void RubyGenerator::PrintEnum(const EnumDescriptor* descriptor) const {
-  map<string,string> data;
-  data["class_name"] = descriptor->name();
-
-  printer_->Print(data, "class $class_name$ < ::Protobuf::Enum");
-  printer_->Indent();
-  PrintNewLine();
+  PrintClassDeclaration(descriptor->name(), CLASS_TYPE_ENUM);
 
   for (int i = 0; i < descriptor->value_count(); i++) {
     PrintEnumValue(descriptor->value(i));
   }
 
-  printer_->Outdent();
-  printer_->Print(data, "end");
-  PrintNewLine();
-
+  PrintBlockEnd();
   PrintNewLine();
 }
 
 // Print the given enum value to the Enum class DSL methods.
 void RubyGenerator::PrintEnumValue(const EnumValueDescriptor* descriptor) const {
-  map<string,string> data;
-  data["name"] = descriptor->name();
-  data["number"] = ConvertIntToString(descriptor->number());
-  printer_->Print(data, "define :$name$, $number$");
+  string number = ConvertIntToString(descriptor->number()).c_str();
+  printer_->Print("define :$name$, $number$", "name", descriptor->name().c_str(), "number", number);
+  ValidatePrinter("Failed printing enum value");
   PrintNewLine();
 }
 
@@ -397,29 +371,23 @@ void RubyGenerator::PrintServices() const {
 
 // Print the given service as a Ruby class.
 void RubyGenerator::PrintService(const ServiceDescriptor* descriptor) const {
-  map<string,string> data;
-  data["class_name"] = descriptor->name();
-
-  printer_->Print(data, "class $class_name$ < ::Protobuf::Rpc::Service");
-  PrintNewLine();
-  printer_->Indent();
+  PrintClassDeclaration(descriptor->name(), CLASS_TYPE_SERVICE);
 
   for (int i = 0; i < descriptor->method_count(); i++) {
     PrintServiceMethod(descriptor->method(i));
   }
 
-  printer_->Outdent();
-  printer_->Print("end");
-  PrintNewLine();
+  PrintBlockEnd();
 }
 
 // Print the rpc DSL declaration to the Ruby service class.
 void RubyGenerator::PrintServiceMethod(const MethodDescriptor* descriptor) const {
   map<string,string> data;
-  data["name"] = Underscore(descriptor->name());
+  data["method_name"] = descriptor->name();
   data["request_klass"] = Constantize(descriptor->input_type()->full_name());
   data["response_klass"] = Constantize(descriptor->output_type()->full_name());
-  printer_->Print(data, "rpc :$name$, $request_klass$, $response_klass$");
+  printer_->Print(data, "rpc :$method_name$, $request_klass$, $response_klass$");
+  ValidatePrinter("Failed printing rpc method");
   PrintNewLine();
 }
 
@@ -433,20 +401,11 @@ void RubyGenerator::PrintDanglingExtendedMessages() const {
     PrintComment("Extended Messages", true);
 
     tr1::unordered_map<string, vector<const FieldDescriptor*> >::iterator it;
-    for (it = extended_messages.begin(); it != extended_messages.end(); ++it ) {
-      map<string,string> data;
-      data["class_name"] = Constantize(it->first);
-
-      printer_->Print(data, "class $class_name$");
-      printer_->Indent();
-      PrintNewLine();
-
-      PrintMessageExtensionFields(it->first);
-
-      printer_->Outdent();
-      printer_->Print(data, "end");
-      PrintNewLine();
-      PrintNewLine();
+    for (it = extended_messages.begin(); it != extended_messages.end(); it++) {
+      string extended_message = it->first;
+      PrintClassDeclaration(Constantize(extended_message), CLASS_TYPE_NONE);
+      PrintMessageExtensionFields(extended_message);
+      PrintBlockEnd();
     }
   }
 }
@@ -464,27 +423,10 @@ bool RubyGenerator::DescriptorHasExtensions(const Descriptor* descriptor) const 
   }
 }
 
-// Print a header or one-line comment (as indicated by the as_header bool).
-void RubyGenerator::PrintComment(string comment, bool as_header) const {
-  char format[] = "# $comment$\n";
-  char format_multi[] = "##\n# $comment$\n#\n";
-
-  map<string,string> data;
-  data["comment"] = comment;
-
-  if (as_header) {
-    printer_->Print(data, format_multi);
-  }
-  else {
-    printer_->Print(data, format);
-  }
-}
-
 // Prints a require with the given ruby library.
 void RubyGenerator::PrintRequire(string lib_name) const {
-  map<string,string> data;
-  data["lib"] = lib_name;
-  printer_->Print(data, "require '$lib$'\n");
+  printer_->Print("require '$lib$'\n", "lib", lib_name.c_str());
+  ValidatePrinter("Failed printing require");
 }
 
 // Print a comment indicating that the file was generated.
@@ -517,8 +459,101 @@ void RubyGenerator::PrintComment(string comment) const {
   PrintComment(comment, false);
 }
 
+// Print a header or one-line comment (as indicated by the as_header bool).
+void RubyGenerator::PrintComment(string comment, bool as_header) const {
+  string format = "# $comment$";
+  if (as_header) {
+    format = "##\n# $comment$\n#";
+  }
+  printer_->Print(format.c_str(), "comment", comment.c_str());
+  ValidatePrinter("Failed printing comment");
+  PrintNewLine();
+}
+
 void RubyGenerator::PrintNewLine() const {
-  printer_->Print("\n");
+  PrintNewLine(1);
+}
+
+void RubyGenerator::PrintNewLine(int num_newlines) const {
+  for (int i = indent_level; i > 0; i--)
+    printer_->Outdent();
+
+  for (int i = 0; i < num_newlines; i++) {
+    printer_->Print("\n");
+    ValidatePrinter("Failed printing newline");
+  }
+
+  for (int i = 0; i < indent_level; i++)
+    printer_->Indent();
+}
+
+void RubyGenerator::Indent() const {
+  printer_->Indent();
+  indent_level++;
+}
+
+void RubyGenerator::Outdent() const {
+  if (indent_level > 0) {
+    printer_->Outdent();
+    indent_level--;
+  }
+}
+
+void RubyGenerator::PrintClassDeclaration(string class_name, RubyClassType class_type) const {
+  PrintClassDeclaration(class_name, class_type, false);
+}
+
+void RubyGenerator::PrintClassDeclaration(string class_name, RubyClassType class_type, bool empty_body) const {
+  PrintBlockDeclaration(RUBY_CLASS, class_type, class_name, empty_body);
+}
+
+void RubyGenerator::PrintModuleDeclaration(string module_name) const {
+  PrintModuleDeclaration(module_name, false);
+}
+
+void RubyGenerator::PrintModuleDeclaration(string module_name, bool empty_body) const {
+  PrintBlockDeclaration(RUBY_MODULE, CLASS_TYPE_NONE, module_name, empty_body);
+}
+
+void RubyGenerator::PrintBlockDeclaration(RubyBlockType block_type, RubyClassType class_type, string block_name, bool empty_body) const {
+  string format = "$block_type$ $block_name$";
+  map<string,string> data;
+  data["block_name"] = block_name;
+
+  switch (block_type) {
+    case RUBY_CLASS:  data["block_type"] = "class"; break;
+    case RUBY_MODULE: data["block_type"] = "module"; break;
+  }
+
+  if (class_type != CLASS_TYPE_NONE) {
+    format += " < $parent_type$";
+    switch (class_type) {
+      case CLASS_TYPE_MESSAGE: data["parent_type"] = "::Protobuf::Message"; break;
+      case CLASS_TYPE_ENUM:    data["parent_type"] = "::Protobuf::Enum"; break;
+      case CLASS_TYPE_SERVICE: data["parent_type"] = "::Protobuf::Rpc::Service"; break;
+      case CLASS_TYPE_NONE: break;
+    }
+  }
+
+  if (empty_body) {
+    format += "; end";
+  }
+
+  printer_->Print(data, format.c_str());
+  ValidatePrinter("Failed printing block declaration");
+  PrintNewLine();
+
+  if (! empty_body) {
+    Indent();
+  }
+}
+
+
+void RubyGenerator::PrintBlockEnd() const {
+  Outdent();
+  printer_->Print("end");
+  ValidatePrinter("Failed printing block end");
+  PrintNewLine();
 }
 
 // We need to store any extension fields defined in the scope of this
@@ -537,6 +572,13 @@ void RubyGenerator::StoreExtensionFields(const Descriptor* descriptor) const {
     const FieldDescriptor* extension_field = descriptor->extension(i);
     const Descriptor* containing = extension_field->containing_type();
     extended_messages[containing->full_name()].push_back(extension_field);
+  }
+}
+
+void RubyGenerator::ValidatePrinter(string fail_message) const {
+  if ((*printer_).failed()) {
+    failed_message = fail_message;
+    throw 1;
   }
 }
 

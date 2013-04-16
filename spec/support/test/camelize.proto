@@ -1,0 +1,11 @@
+package test;
+
+message simple_mail
+{
+  optional string body = 1;
+}
+
+message mail_list
+{
+  repeated simple_mail simple_mails = 1;
+}
