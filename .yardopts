@@ -1,3 +1,4 @@
+--exclude doc --exclude coverage
 --no-private
 --hide-void-return
 
